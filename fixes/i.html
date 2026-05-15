@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; flex-wrap: wrap; gap: 20px; padding: 20px; background: #f4f6f9; color: #333; margin: 0; }
+    .card { background: white; padding: 25px; border-radius: 8px; flex: 1; min-width: 300px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); box-sizing: border-box; }
+    h3 { margin-top: 0; color: #1a73e8; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; }
+    label { font-weight: 600; display: block; margin-top: 10px; font-size: 0.9em; }
+    input { width: 100%; padding: 12px; margin: 6px 0 12px 0; box-sizing: border-box; border: 1px solid #dadce0; border-radius: 4px; font-size: 1em; }
+    input:focus { border-color: #1a73e8; outline: none; }
+    button { width: 100%; padding: 12px; background: #1a73e8; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 1em; cursor: pointer; transition: background 0.2s; }
+    button:hover { background: #1557b0; }
+    
+    /* Search Layout Container */
+    .search-container { position: relative; width: 100%; }
+    
+    /* CUSTOM DROPDOWN BOX - Ensures full address visibility */
+    .dropdown-menu {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      width: 100%;
+      background: white;
+      border: 1px solid #dadce0;
+      border-top: none;
+      border-radius: 0 0 4px 4px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      max-height: 250px;
+      overflow-y: auto;
+      z-index: 1000;
+      display: none;
+      box-sizing: border-box;
+      margin-top: -12px; /* Pulls up flush against input */
+    }
+    .dropdown-item {
+      padding: 12px;
+      cursor: pointer;
+      font-size: 0.95em;
+      white-space: normal; /* Allows long addresses to wrap to next line cleanly */
+      word-wrap: break-word;
+      border-bottom: 1px solid #f1f3f4;
+    }
+    .dropdown-item:last-child { border-bottom: none; }
+    .dropdown-item:hover { background-color: #f8f9fa; color: #1a73e8; }
+    
+    .metrics { background: #e8f0fe; padding: 15px; margin-top: 15px; border-radius: 4px; border-left: 4px solid #34a853; font-size: 0.95em; line-height: 1.6; }
+    .status { margin-top: 5px; font-size: 0.85em; color: #1a73e8; font-weight: 500; min-height: 20px; }
+  </style>
+</head>
+<body>
+
+  <!-- LEFT COLUMN: SCHEDULING INTERFACE -->
+  <div class="card">
+    <h3>Appointment Setup</h3>
+    
+    <label for="name">Full Name</label>
+    <input type="text" id="name" placeholder="e.g. Manish Sharma">
+    
+    <label for="email">Email Address</label>
+    <input type="email" id="email" placeholder="e.g. yourname@domain.com">
+    
+    <label for="date">Appointment Date & Time</label>
+    <input type="datetime-local" id="date">
+    
+    <button onclick="bookAppointment()">Confirm Profile & Booking</button>
+    <div id="bookingStatus" style="margin-top: 15px; font-weight: bold; color: #202124;"></div>
+  </div>
+
+  <!-- RIGHT COLUMN: ROBUST SEAMLESS TYPEAHEAD PANEL -->
+  <div class="card">
+    <h3>Destination Verification</h3>
+    <p style="font-size: 0.85em; color: #5f6368; margin-top: 0;">Type to search, then click a full address from the custom list dropdown box.</p>
+    
+    <label for="locationSearch">Search Address</label>
+    <div class="search-container">
+      <input id="locationSearch" type="text" placeholder="Start typing address (minimum 3 letters)..." oninput="handleTypeAhead(this.value)" autocomplete="off">
+      <!-- Floating dropdown layout target built explicitly inside application flow -->
+      <div id="customDropdown" class="dropdown-menu"></div>
+    </div>
+    
+    <div id="searchStatus" class="status"></div>
+
+    <!-- Metrics Tracking Box (Revealed upon valid option choice execution) -->
+    <div id="metricsPanel" class="metrics" style="display: none;">
+      <strong>Verified Location Address:</strong><br>
+      <span style="color: #202124; font-weight: 600;" id="cleanAddress"></span><br><br>
+      <strong>Calculated Operational Metrics:</strong>
+      <p style="margin: 4px 0;">🚗 Driving Distance: <span id="dist" style="font-weight: bold;"></span></p>
+      <p style="margin: 4px 0;">⏱️ Estimated Travel Time: <span id="dur" style="font-weight: bold;"></span></p>
+    </div>
+  </div>
+
+  <script>
+    let verifiedData = { address: "", lat: 0, lng: 0, distance: "", duration: "" };
+    let debounceTimer;
+    
+    // Fallback geolocation coordinates mapping arrays
+    let deviceLat = 28.8955;
+    let deviceLng = 76.6066;
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(position => {
+        deviceLat = position.coords.latitude;
+        deviceLng = position.coords.longitude;
+      });
+    }
+
+    // Hide dropdown if user clicks outside of the search box interface context completely
+    document.addEventListener('click', function(e) {
+      if (e.target.id !== 'locationSearch') {
+        document.getElementById('customDropdown').style.display = 'none';
+      }
+    });
+
+    /**
+     * Captures tracking values, manages execution debouncing thresholds
+     */
+    function handleTypeAhead(value) {
+      clearTimeout(debounceTimer);
+      const dropdown = document.getElementById('customDropdown');
+      const statusDiv = document.getElementById('searchStatus');
+      
+      if (value.length < 3) {
+        dropdown.innerHTML = "";
+        dropdown.style.display = 'none';
+        statusDiv.innerText = "";
+        return;
+      }
+
+      statusDiv.innerText = "Querying map endpoints...";
+      
+      // Debounce window parameters setup configuration
+      debounceTimer = setTimeout(() => {
+        google.script.run
+          .withSuccessHandler(populateDropdownOptions)
+          .getPlaceSuggestions(value);
+      }, 400);
+    }
+
+    /**
+     * Completely renders addresses as clear, text-wrapping clickable list layout components
+     */
+    function populateDropdownOptions(suggestions) {
+      const dropdown = document.getElementById('customDropdown');
+      const statusDiv = document.getElementById('searchStatus');
+      dropdown.innerHTML = ""; // Wipe older options entries
+      
+      if(suggestions.length === 0) {
+        statusDiv.innerText = "No readable match profiles found.";
+        dropdown.style.display = 'none';
+        return;
+      }
+
+      suggestions.forEach(addressText => {
+        let itemDiv = document.createElement('div');
+        itemDiv.className = "dropdown-item";
+        itemDiv.innerText = addressText;
+        
+        // Handle dropdown element select mechanics execution mappings
+        itemDiv.onclick = function() {
+          document.getElementById('locationSearch').value = addressText;
+          dropdown.style.display = 'none';
+          statusDiv.innerText = "Target selected. Fetching final metrics details...";
+          fetchFinalMetrics(addressText);
+        };
+        
+        dropdown.appendChild(itemDiv);
+      });
+      
+      dropdown.style.display = 'block'; // Make custom list block container view window visible
+      statusDiv.innerText = "Suggestions loaded.";
+    }
+
+    /**
+     * Triggers backend engine calculations to return precise routing distance details
+     */
+    function fetchFinalMetrics(selectedAddress) {
+      google.script.run
+        .withSuccessHandler(function(response) {
+          if(response.status === "success") {
+            document.getElementById('searchStatus').innerText = "Location metrics verified.";
+            document.getElementById('cleanAddress').innerText = response.address;
+            document.getElementById('dist').innerText = response.distance;
+            document.getElementById('dur').innerText = response.duration;
+            document.getElementById('metricsPanel').style.display = 'block';
+
+            verifiedData = response;
+          } else {
+            document.getElementById('searchStatus').innerText = "Failed parsing target coordinate metrics values.";
+          }
+        })
+        .processLocationAndMetrics(deviceLat, deviceLng, selectedAddress);
+    }
+
+    /**
+     * Builds payload objects to run execution actions on backend calendar sheet files
+     */
+    function bookAppointment() {
+      const name = document.getElementById('name').value;
+      const email = document.getElementById('email').value;
+      const date = document.getElementById('date').value;
+
+      if(!name || !email || !date || !verifiedData.address) {
+        return alert("Please fill out your parameters and select a valid location option from the list.");
+      }
+
+      const bookingStatus = document.getElementById('bookingStatus');
+      bookingStatus.style.color = "#1a73e8";
+      bookingStatus.innerText = "Synchronizing records, generating Drive archives, and writing to Google Calendar...";
+
+      const payload = {
+        name: name,
+        email: email,
+        dateTimeString: date,
+        address: verifiedData.address,
+        lat: verifiedData.lat,
+        lng: verifiedData.lng,
+        distance: verifiedData.distance,
+        duration: verifiedData.duration
+      };
+
+      google.script.run
+        .withSuccessHandler(function(res) {
+          if(res.status === "success") {
+            bookingStatus.style.color = "#34a853";
+            bookingStatus.innerText = "Success! Profile structured and confirmation updates dispatched via automated mail.";
+            
+            // Re-zero properties state trackers values
+            document.getElementById('name').value = "";
+            document.getElementById('email').value = "";
+            document.getElementById('date').value = "";
+            document.getElementById('locationSearch').value = "";
+            document.getElementById('metricsPanel').style.display = 'none';
+          } else {
+            bookingStatus.style.color = "#d93025";
+            bookingStatus.innerText = "Runtime Error: " + res.message;
+          }
+        })
+        .createAppointment(payload);
+    }
+  </script>
+</body>
+</html>
