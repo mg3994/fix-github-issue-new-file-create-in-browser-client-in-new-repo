@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; display: flex; gap: 20px; padding: 20px; background: #f4f6f9; }
+    .card { background: white; padding: 25px; border-radius: 8px; flex: 1; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    input { width: 100%; padding: 12px; margin: 10px 0; box-sizing: border-box; border: 1px solid #dadce0; border-radius: 4px; }
+    button { width: 100%; padding: 12px; background: #1a73e8; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; }
+    button:hover { background: #1557b0; }
+    .metrics { background: #e8f0fe; padding: 15px; margin-top: 15px; border-radius: 4px; border-left: 4px solid #1a73e8; font-size: 0.95em; line-height: 1.5; }
+    .status { margin-top: 10px; font-weight: bold; color: #5f6368; }
+  </style>
+</head>
+<body>
+
+  <!-- LEFT: APPOINTMENT SCHEDULER -->
+  <div class="card">
+    <h3>Schedule Appointment</h3>
+    <input type="text" id="name" placeholder="Full Name">
+    <input type="email" id="email" placeholder="Email Address">
+    <input type="datetime-local" id="date">
+    <button onclick="bookAppointment()">Confirm and Process Profile</button>
+    <div id="bookingStatus" class="status"></div>
+  </div>
+
+  <!-- RIGHT: TARGET GEO-SEARCH -->
+  <div class="card">
+    <h3>Location Verification</h3>
+    <p style="font-size:0.85em; color: #5f6368; margin-top:0;">Type your destination landmark or address and hit Verify.</p>
+    <input id="locationQuery" type="text" placeholder="e.g. Connaught Place, New Delhi">
+    <button style="background: #34a853;" onclick="verifyLocation()">Verify Location & Route</button>
+    
+    <div id="metricsPanel" class="metrics" style="display:none">
+      <strong>Verified Location Metadata:</strong><br>
+      <span style="color:#5f6368;" id="cleanAddress"></span><br><br>
+      <strong>Driving Distance:</strong> <span id="dist"></span><br>
+      <strong>Estimated Travel Time:</strong> <span id="dur"></span>
+    </div>
+  </div>
+
+  <script>
+    // Hidden storage variables evaluated on verification callback
+    let verifiedData = { address: "", lat: 0, lng: 0, distance: "", duration: "" };
+    
+    // Fallback device location coordinates (Defaults to Rohtak area)
+    let deviceLat = 28.8955;
+    let deviceLng = 76.6066;
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(position => {
+        deviceLat = position.coords.latitude;
+        deviceLng = position.coords.longitude;
+      });
+    }
+
+    function verifyLocation() {
+      const query = document.getElementById('locationQuery').value;
+      if(!query) return alert("Please type a location first.");
+      
+      document.getElementById('bookingStatus').innerText = "Analyzing location string...";
+
+      google.script.run
+        .withSuccessHandler(function(response) {
+          if(response.status === "success") {
+            document.getElementById('bookingStatus').innerText = "Location verified.";
+            document.getElementById('cleanAddress').innerText = response.address;
+            document.getElementById('dist').innerText = response.distance;
+            document.getElementById('dur').innerText = response.duration;
+            document.getElementById('metricsPanel').style.display = 'block';
+
+            // Store response data internally for use during booking
+            verifiedData = response;
+          } else {
+            alert("Geocoding failed: " + response.message);
+            document.getElementById('bookingStatus').innerText = "Verification failed.";
+          }
+        })
+        .processLocationAndMetrics(deviceLat, deviceLng, query);
+    }
+
+    function bookAppointment() {
+      const name = document.getElementById('name').value;
+      const email = document.getElementById('email').value;
+      const date = document.getElementById('date').value;
+
+      if(!name || !email || !date || !verifiedData.address) {
+        return alert("Please fill out your credentials and verify the destination location before completing booking.");
+      }
+
+      document.getElementById('bookingStatus').innerText = "Syncing with Calendar and Drive...";
+
+      const transactionPayload = {
+        name: name,
+        email: email,
+        dateTimeString: date,
+        address: verifiedData.address,
+        lat: verifiedData.lat,
+        lng: verifiedData.lng,
+        distance: verifiedData.distance,
+        duration: verifiedData.duration
+      };
+
+      google.script.run
+        .withSuccessHandler(function(res) {
+          if(res.status === "success") {
+            document.getElementById('bookingStatus').innerText = "Success! Portal synchronization complete.";
+            alert("Appointment Confirmed! Check your email inbox for confirmation details.");
+          } else {
+            document.getElementById('bookingStatus').innerText = "Error completing booking pipeline.";
+          }
+        })
+        .createAppointment(transactionPayload);
+    }
+  </script>
+</body>
+</html>
