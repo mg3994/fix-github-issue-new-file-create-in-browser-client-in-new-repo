@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Load Google Maps API via Google's secure JSAPI architecture -->
+  <script src="https://www.google.com/jsapi"></script>
+  <script>
+    google.load("maps", "3", { other_params: "sensor=false" });
+  </script>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; flex-wrap: wrap; gap: 20px; padding: 20px; background: #f4f6f9; color: #333; margin: 0; }
+    .card { background: white; padding: 25px; border-radius: 8px; flex: 1; min-width: 320px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); box-sizing: border-box; }
+    h3 { margin-top: 0; color: #1a73e8; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; }
+    label { font-weight: 600; display: block; margin-top: 10px; font-size: 0.9em; }
+    input { width: 100%; padding: 12px; margin: 6px 0 12px 0; box-sizing: border-box; border: 1px solid #dadce0; border-radius: 4px; font-size: 1em; }
+    input:focus { border-color: #1a73e8; outline: none; }
+    button { width: 100%; padding: 12px; background: #1a73e8; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 1em; cursor: pointer; transition: background 0.2s; }
+    button:hover { background: #1557b0; }
+    
+    .search-container { position: relative; width: 100%; }
+    .dropdown-menu {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      width: 100%;
+      background: white;
+      border: 1px solid #dadce0;
+      border-top: none;
+      border-radius: 0 0 4px 4px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 1000;
+      display: none;
+      box-sizing: border-box;
+      margin-top: -12px;
+    }
+    .dropdown-item { padding: 12px; cursor: pointer; font-size: 0.95em; white-space: normal; word-wrap: break-word; border-bottom: 1px solid #f1f3f4; }
+    .dropdown-item:hover { background-color: #f8f9fa; color: #1a73e8; }
+    
+    /* MAP STYLING */
+    #mapCanvas { width: 100%; height: 300px; border-radius: 6px; border: 1px solid #dadce0; margin-top: 12px; background: #e5e3df; }
+    
+    .metrics { background: #e8f0fe; padding: 15px; margin-top: 15px; border-radius: 4px; border-left: 4px solid #34a853; font-size: 0.95em; line-height: 1.6; }
+    .status { margin-top: 5px; font-size: 0.85em; color: #1a73e8; font-weight: 500; min-height: 20px; }
+    .geo-tag { font-family: monospace; font-size: 0.85em; background: #f1f3f4; padding: 2px 6px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+
+  <!-- LEFT PANEL: USER INFRASTRUCTURE AND INFORMATION -->
+  <div class="card">
+    <h3>Appointment Setup</h3>
+    
+    <label for="name">Full Name</label>
+    <input type="text" id="name" placeholder="e.g. Manish Sharma">
+    
+    <label for="email">Email Address</label>
+    <input type="email" id="email" placeholder="e.g. yourname@domain.com">
+    
+    <label for="date">Appointment Date & Time</label>
+    <input type="datetime-local" id="date">
+    
+    <button onclick="bookAppointment()">Confirm Profile & Booking</button>
+    <div id="bookingStatus" style="margin-top: 15px; font-weight: bold; color: #202124;"></div>
+  </div>
+
+  <!-- RIGHT PANEL: INTERACTIVE SEARCH & MAP GEOLOCATION ENGINE -->
+  <div class="card">
+    <h3>Destination Verification</h3>
+    <p style="font-size: 0.85em; color: #5f6368; margin-top: 0;">
+      Type to search, choose from suggestions, **OR click directly on the map** to drop a custom pinpoint marker.
+    </p>
+    
+    <label for="locationSearch">Search Address</label>
+    <div class="search-container">
+      <input id="locationSearch" type="text" placeholder="Start typing address..." oninput="handleTypeAhead(this.value)" autocomplete="off">
+      <div id="customDropdown" class="dropdown-menu"></div>
+    </div>
+    
+    <div id="searchStatus" class="status">Detecting device current position...</div>
+
+    <!-- Embedded Google Map view container element -->
+    <div id="mapCanvas"></div>
+    
+    <!-- Real-time Multi-Case Coordinates Telemetry View Box -->
+    <div id="metricsPanel" class="metrics" style="display: none;">
+      <strong>Target Location Context:</strong><br>
+      <span style="color: #202124; font-weight: 600;" id="cleanAddress"></span><br>
+      
+      <p style="margin: 8px 0 4px 0;">📍 Target Location: <span class="geo-tag" id="tagTargetCoords">0.0, 0.0</span></p>
+      <p style="margin: 4px 0 8px 0;">📱 Current Position: <span class="geo-tag" id="tagCurrentCoords">0.0, 0.0</span></p>
+      
+      <strong>Calculated Matrix Routes:</strong>
+      <p style="margin: 4px 0;">🚗 Driving Distance: <span id="dist" style="font-weight: bold;"></span></p>
+      <p style="margin: 4px 0;">⏱️ Travel Duration: <span id="dur" style="font-weight: bold;"></span></p>
+    </div>
+  </div>
+
+  <script>
+    let verifiedData = { address: "", lat: 0, lng: 0, distance: "", duration: "" };
+    let debounceTimer;
+    
+    // Core Coordinate State Vectors (Defaults to Rohtak region bounds)
+    let currentDeviceLat = 28.8955;
+    let currentDeviceLng = 76.6066;
+    
+    let map;
+    let targetMarker;
+
+    // Trigger UI init once document window contexts are fully built
+    window.onload = function() {
+      initMapEngine();
+    };
+
+    /**
+     * Initializes the Google Map Engine view layout setup
+     */
+    function initMapEngine() {
+      const centerLatLng = new google.maps.LatLng(currentDeviceLat, currentDeviceLng);
+      
+      const mapOptions = {
+        zoom: 13,
+        center: centerLatLng,
+        mapTypeId: google.maps.MapTypeId.ROADMAP,
+        mapTypeControl: true,
+        streetViewControl: false
+      };
+      
+      map = new google.maps.Map(document.getElementById("mapCanvas"), mapOptions);
+
+      // Instantiates a draggable marker pin on the map
+      targetMarker = new google.maps.Marker({
+        position: centerLatLng,
+        map: map,
+        draggable: true,
+        animation: google.maps.Animation.DROP,
+        title: "Target Location Pin"
+      });
+
+      // Hook up native browser location telemetry tracking lines
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(position => {
+          currentDeviceLat = position.coords.latitude;
+          currentDeviceLng = position.coords.longitude;
+          
+          const userLoc = new google.maps.LatLng(currentDeviceLat, currentDeviceLng);
+          map.setCenter(userLoc);
+          targetMarker.setPosition(userLoc);
+          document.getElementById('searchStatus').innerText = "Device position synchronized.";
+        }, () => {
+          document.getElementById('searchStatus').innerText = "Geolocation denied. Using default map views.";
+        });
+      }
+
+      // CLICK INTERACTION: Drop a pinpoint anywhere on the map grid layout directly
+      google.maps.event.addListener(map, 'click', function(event) {
+        handleManualPinPosition(event.latLng.lat(), event.latLng.lng());
+      });
+
+      // DRAG INTERACTION: Calculate metrics when user finishes dragging the marker pin
+      google.maps.event.addListener(targetMarker, 'dragend', function(event) {
+        handleManualPinPosition(event.latLng.lat(), event.latLng.lng());
+      });
+    }
+
+    /**
+     * Fired when a user manually clicks or drags a pin on the canvas frame map
+     */
+    function handleManualPinPosition(lat, lng) {
+      targetMarker.setPosition(new google.maps.LatLng(lat, lng));
+      document.getElementById('searchStatus').innerText = "Pin dropped. Computing coordinates metrics routes...";
+      
+      google.script.run
+        .withSuccessHandler(updateTelemetryUI)
+        .processPinDropMetrics(currentDeviceLat, currentDeviceLng, lat, lng);
+    }
+
+    /**
+     * Frontend Type-Ahead keystroke input event controller hook 
+     */
+    function handleTypeAhead(value) {
+      clearTimeout(debounceTimer);
+      const dropdown = document.getElementById('customDropdown');
+      
+      if (value.length < 3) {
+        dropdown.innerHTML = "";
+        dropdown.style.display = 'none';
+        return;
+      }
+
+      debounceTimer = setTimeout(() => {
+        google.script.run
+          .withSuccessHandler(populateDropdownOptions)
+          .getPlaceSuggestions(value);
+      }, 400);
+    }
+
+    function populateDropdownOptions(suggestions) {
+      const dropdown = document.getElementById('customDropdown');
+      dropdown.innerHTML = ""; 
+      
+      if(suggestions.length === 0) {
+        dropdown.style.display = 'none';
+        return;
+      }
+
+      suggestions.forEach(addressText => {
+        let itemDiv = document.createElement('div');
+        itemDiv.className = "dropdown-item";
+        itemDiv.innerText = addressText;
+        
+        itemDiv.onclick = function() {
+          document.getElementById('locationSearch').value = addressText;
+          dropdown.style.display = 'none';
+          document.getElementById('searchStatus').innerText = "Resolving coordinates matching fields...";
+          
+          google.script.run
+            .withSuccessHandler(function(response) {
+              if(response.status === "success") {
+                // Update map frame view vectors focus target properties
+                const newPos = new google.maps.LatLng(response.lat, response.lng);
+                map.setCenter(newPos);
+                map.setZoom(15);
+                targetMarker.setPosition(newPos);
+                
+                updateTelemetryUI(response);
+              }
+            })
+            .processLocationAndMetrics(currentDeviceLat, currentDeviceLng, addressText);
+        };
+        dropdown.appendChild(itemDiv);
+      });
+      dropdown.style.display = 'block';
+    }
+
+    /**
+     * Updates fields with high accuracy coordinates metrics values
+     */
+    function updateTelemetryUI(response) {
+      if(response.status === "success") {
+        document.getElementById('searchStatus').innerText = "Location processing synchronized.";
+        document.getElementById('cleanAddress').innerText = response.address;
+        document.getElementById('dist').innerText = response.distance;
+        document.getElementById('dur').innerText = response.duration;
+        
+        // Render precise string vectors mappings
+        document.getElementById('tagTargetCoords').innerText = `${response.lat.toFixed(6)}, ${response.lng.toFixed(6)}`;
+        document.getElementById('tagCurrentCoords').innerText = `${currentDeviceLat.toFixed(6)}, ${currentDeviceLng.toFixed(6)}`;
+        
+        document.getElementById('metricsPanel').style.display = 'block';
+        verifiedData = response;
+      } else {
+        document.getElementById('searchStatus').innerText = "Error parsing spatial matrix.";
+      }
+    }
+
+    function bookAppointment() {
+      const name = document.getElementById('name').value;
+      const email = document.getElementById('email').value;
+      const date = document.getElementById('date').value;
+
+      if(!name || !email || !date || !verifiedData.address) {
+        return alert("Please configure parameters and verify your destination on the map layout.");
+      }
+
+      const bookingStatus = document.getElementById('bookingStatus');
+      bookingStatus.style.color = "#1a73e8";
+      bookingStatus.innerText = "Synchronizing records, generating Drive archives, and writing to Google Calendar...";
+
+      const payload = {
+        name: name,
+        email: email,
+        dateTimeString: date,
+        address: verifiedData.address,
+        lat: verifiedData.lat,
+        lng: verifiedData.lng,
+        currentLat: currentDeviceLat,
+        currentLng: currentDeviceLng,
+        distance: verifiedData.distance,
+        duration: verifiedData.duration
+      };
+
+      google.script.run
+        .withSuccessHandler(function(res) {
+          if(res.status === "success") {
+            bookingStatus.style.color = "#34a853";
+            bookingStatus.innerText = "Success! Core tracking coordinates metrics locked and synced across sheets repositories.";
+            
+            document.getElementById('name').value = "";
+            document.getElementById('email').value = "";
+            document.getElementById('date').value = "";
+            document.getElementById('locationSearch').value = "";
+            document.getElementById('metricsPanel').style.display = 'none';
+          } else {
+            bookingStatus.style.color = "#d93025";
+            bookingStatus.innerText = "Runtime Exception Error: " + res.message;
+          }
+        })
+        .createAppointment(payload);
+    }
+
+    // Hide suggestions menu if clicked outside search view container completely
+    document.addEventListener('click', function(e) {
+      if (e.target.id !== 'locationSearch') {
+        document.getElementById('customDropdown').style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>
